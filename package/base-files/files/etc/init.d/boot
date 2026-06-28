@@ -37,22 +37,47 @@ boot() {
 	touch /var/log/lastlog
 	mkdir -p /tmp/resolv.conf.d
 	touch /tmp/resolv.conf.d/resolv.conf.auto
-	ln -sf /tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf.auto
 	ln -sf /tmp/resolv.conf.d/resolv.conf.auto /tmp/resolv.conf
 	grep -q debugfs /proc/filesystems && /bin/mount -o nosuid,nodev,noexec,noatime -t debugfs debugfs /sys/kernel/debug
 	grep -q bpf /proc/filesystems && /bin/mount -o nosuid,nodev,noexec,noatime,mode=0700 -t bpf bpffs /sys/fs/bpf
 	grep -q pstore /proc/filesystems && /bin/mount -o nosuid,nodev,noexec,noatime -t pstore pstore /sys/fs/pstore
 	[ "$FAILSAFE" = "true" ] && touch /tmp/.failsafe
 
-	# update wifi config before additional ieee80211 hotplug events
-	# get executed because of '/sbin/kmodloader' kmod loading.
-	[ -f /etc/board.json ] && /sbin/wifi config
+	# shutdown 5G modem
+	echo 1 >/sys/class//gpio/5gpower/value
+	echo 1 >/sys/class//gpio/4g1power/value
+	echo 1 >/sys/class//gpio/4g2power/value
 
+	touch /tmp/.config_pending
 	/sbin/kmodloader
 
+	[ ! -f /etc/config/wireless ] && {
+		# compat for bcm47xx and mvebu
+		sleep 1
+	}
+
+	mkdir -p /tmp/.uci
+	[ -f /etc/uci-defaults/30_uboot-envtools ] && (. /etc/uci-defaults/30_uboot-envtools)
+	/bin/config_generate
+	rm -f /tmp/.config_pending
+	/sbin/wifi config
 	uci_apply_defaults
 	sync
+	
+	echo 0 >/sys/class//gpio/4g1power/value
 
 	# temporary hack until configd exists
 	/sbin/reload_config
+
+	echo 0 >/sys/class//gpio/5gpower/value
+
+	echo 0 >/sys/class//gpio/5greset/value
+	sleep 1
+	echo 1 >/sys/class//gpio/5greset/value
+	
+
+	echo 0 >/sys/class//gpio/4g2power/value
+
+	# shutdown fan
+	echo 0 > /sys/class/gpio/fan/value
 }
