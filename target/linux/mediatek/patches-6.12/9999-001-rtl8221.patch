@@ -1,0 +1,32 @@
+--- a/drivers/net/dsa/Makefile
++++ b/drivers/net/dsa/Makefile
+@@ -8,7 +8,7 @@
+ obj-$(CONFIG_NET_DSA_KS8995) 	+= ks8995.o
+ obj-$(CONFIG_NET_DSA_AN8855)	+= an8855.o
+ obj-$(CONFIG_NET_DSA_LANTIQ_GSWIP) += lantiq_gswip.o
+-obj-$(CONFIG_NET_DSA_MT7530)	+= mt7530.o
++obj-$(CONFIG_NET_DSA_MT7530)	+= mt7530.o rtl8221.o
+ obj-$(CONFIG_NET_DSA_MT7530_MDIO) += mt7530-mdio.o
+ obj-$(CONFIG_NET_DSA_MT7530_MMIO) += mt7530-mmio.o
+ obj-$(CONFIG_NET_DSA_MV88E6060) += mv88e6060.o
+--- a/drivers/net/dsa/mt7530.c
++++ b/drivers/net/dsa/mt7530.c
+@@ -2597,6 +2597,8 @@
+ 	return mt7530_setup_vlan0(priv);
+ }
+ 
++extern void rtl8221_init(struct mii_bus *bus);
++
+ static int
+ mt7531_setup(struct dsa_switch *ds)
+ {
+@@ -2617,6 +2619,9 @@
+ 		usleep_range(5000, 5100);
+ 		gpiod_set_value_cansleep(priv->reset, 1);
+ 	}
++
++	msleep(500);
++	rtl8221_init(priv->bus);
+ 
+ 	/* Waiting for MT7530 got to stable */
+ 	INIT_MT7530_DUMMY_POLL(&p, priv, MT753X_TRAP);
