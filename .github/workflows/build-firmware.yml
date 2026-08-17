@@ -34,6 +34,8 @@ jobs:
         run: |
           [ -e rax3000m.config ] && cp rax3000m.config openwrt/.config
           [ -d files ] && cp -r files openwrt/files
+          # 加上这行即可自动赋予执行权限：
+          chmod -R +x openwrt/files/etc/uci-defaults/
 
       - name: Download Package Source
         run: |
