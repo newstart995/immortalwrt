@@ -25,10 +25,15 @@ jobs:
             g++ gcc-multilib libncurses5-dev libssl-dev python3-pyelftools git \
             rsync unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386 file
 
-      - name: Clone ImmortalWrt Source
+      - name: Clone ImmortalWrt Source & Add Extra Feeds
         run: |
           git clone -b master --single-branch https://github.com/immortalwrt/immortalwrt.git openwrt
           cd openwrt
+          
+          # 追加第三方常用软件源 (确保 PassWall / OpenClash 软件齐全)
+          echo "src-git passwall https://github.com/xiaorouji/openwrt-passwall.git;main" >> feeds.conf.default
+          echo "src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages.git;main" >> feeds.conf.default
+          
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
