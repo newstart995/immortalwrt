@@ -1,0 +1,53 @@
+name: Build ImmortalWrt Firmware
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space (Ubuntu Runner)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Initialize Build Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gasm awk gettext ccache python3-setuptools
+
+      - name: Clone ImmortalWrt Source
+        run: |
+          git clone -b master --single-branch https://github.com/immortalwrt/immortalwrt.git openwrt
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load Custom Configuration & Files
+        run: |
+          [ -e rax3000m.config ] && cp rax3000m.config openwrt/.config
+          [ -d files ] && cp -r files openwrt/files
+
+      - name: Download Package Source
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j8
+
+      - name: Compile Firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) V=s
+
+      - name: Upload Firmware Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmortalWrt_RAX3000M
+          path: openwrt/bin/targets/mediatek/filogic/*cmcc_rax3000m*
