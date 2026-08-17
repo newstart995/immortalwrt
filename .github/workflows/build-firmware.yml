@@ -21,7 +21,9 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison gasm awk gettext ccache python3-setuptools
+          sudo apt-get install -y build-essential clang flex bison gawk gettext ccache python3-setuptools \
+            g++ gcc-multilib mrproper libncurses5-dev libssl-dev python3-pyelftools subversion git-core \
+            rsync unzip zlib1g-dev lib32gcc-s1 libc6-dev-i386
 
       - name: Clone ImmortalWrt Source
         run: |
