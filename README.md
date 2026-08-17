@@ -1,93 +1,149 @@
-<img src="https://avatars.githubusercontent.com/u/53193414?s=200&v=4" alt="logo" width="200" height="200" align="right">
+在 GitHub Actions 上为 RAX3000M 编译 ImmortalWrt / OpenWrt 固件时，需要理清“固件打包”与“应用部署”的边界：
 
-# Project ImmortalWrt
+Docker 容器应用（Immich、Vaultwarden、1Panel）不应打包进固件镜像本身。这些应用体积庞大（例如 Immich 镜像上百兆，且依赖 PostgreSQL 等大镜像），如果直接打进 squashfs 固件，会导致固件超出路由器分区限制（无法写入），或者占用大量 precious 的内核固件空间。
 
-ImmortalWrt is a fork of [OpenWrt](https://openwrt.org), with more packages ported, more devices supported, default optimized profiles and localization modifications for mainland China users.<br/>
-Compared to upstream, we allow to use (non-upstreamable) modifications/hacks to provide better feature/performance/support.
+最佳实践策略：
 
-Default login address: http://192.168.1.1 or http://immortalwrt.lan, username: __root__, password: _none_.
+固件内集成：只在 GitHub Actions 中集成 Docker 引擎（docker + dockerd）、底层服务（AdGuard Home、Transmission、qBittorrent）以及基础存储驱动（kmod-fs-ext4 等）。
 
-## Download
-Built firmware images are available for many architectures and come with a package selection to be used as WiFi home router. To quickly find a factory image usable to migrate from a vendor stock firmware to ImmortalWrt, try the *Firmware Selector*.
+运行期部署：刷入固件后，挂载外接硬盘/eMMC 分区，在 Docker 中一键拉取运行 Immich、Vaultwarden 以及 1Panel。
 
-- [ImmortalWrt Firmware Selector](https://firmware-selector.immortalwrt.org/)
+Swap 挂载： Swap 文件必须存在于有写权限的具体文件系统（如外接硬盘或 /overlay）上，因此宜在 GitHub compile 脚本中通过 uci 预设开机挂载脚本，或在系统首次启动脚本（uci-defaults）中自动创建。
 
-If your device is supported, please follow the **Info** link to see install instructions or consult the support resources listed below.
+一、 GitHub Actions .config 关键配置清单
+在你的 GitHub Actions 编译脚本或自定义 .config 文件中，添加以下软件包（以 ImmortalWrt 为例）：
 
-## Development
-To build your own firmware you need a GNU/Linux, BSD or macOS system (case sensitive filesystem required). Cygwin is unsupported because of the lack of a case sensitive file system.<br/>
+Ini, TOML
+# --- 目标架构选择 (RAX3000M MT7981) ---
+CONFIG_TARGET_mediatek=y
+CONFIG_TARGET_mediatek_filogic=y
+CONFIG_TARGET_mediatek_filogic_DEVICE_cmcc_rax3000m=y
 
-  ### Requirements
-  To build with this project, Debian 11 is preferred. And you need use the CPU based on AMD64 architecture, with at least 4GB RAM and 25 GB available disk space. Make sure the __Internet__ is accessible.
+# --- Docker 容器引擎与 Compose 支持 ---
+CONFIG_PACKAGE_docker=y
+CONFIG_PACKAGE_dockerd=y
+CONFIG_PACKAGE_docker-compose=y
+CONFIG_PACKAGE_luci-app-dockerman=y
 
-  The following tools are needed to compile ImmortalWrt, the package names vary between distributions.
+# --- 硬盘挂载与 ext4 文件系统支持 ---
+CONFIG_PACKAGE_kmod-fs-ext4=y
+CONFIG_PACKAGE_e2fsprogs=y
+CONFIG_PACKAGE_block-mount=y
+CONFIG_PACKAGE_luci-app-diskman=y
 
-  - Here is an example for Debian/Ubuntu users:<br/>
-    - Method 1:
-      <details>
-        <summary>Setup dependencies via APT</summary>
+# --- 路由器原生服务应用 ---
+# 1. AdGuard Home
+CONFIG_PACKAGE_adguardhome=y
+CONFIG_PACKAGE_luci-app-adguardhome=y
 
-        ```bash
-        sudo apt update -y
-        sudo apt full-upgrade -y
-        sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential \
-          bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib \
-          g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev \
-          libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev \
-          libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano \
-          ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils \
-          python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs \
-          upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
-        ```
-      </details>
-    - Method 2:
-      ```bash
-      sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-      ```
+# 2. Transmission
+CONFIG_PACKAGE_transmission-daemon-openssl=y
+CONFIG_PACKAGE_luci-app-transmission=y
 
-  Note:
-  - Do everything as an unprivileged user, not root, without sudo.
-  - Using CPUs based on other architectures should be fine to compile ImmortalWrt, but more hacks are needed - No warranty at all.
-  - You must __not__ have spaces or non-ascii characters in PATH or in the work folders on the drive.
-  - If you're using Windows Subsystem for Linux (or WSL), removing Windows folders from PATH is required, please see [Build system setup WSL](https://openwrt.org/docs/guide-developer/build-system/wsl) documentation.
-  - Using macOS as the host build OS is __not__ recommended. No warranty at all. You can get tips from [Build system setup macOS](https://openwrt.org/docs/guide-developer/build-system/buildroot.exigence.macosx) documentation.
-  - For more details, please see [Build system setup](https://openwrt.org/docs/guide-developer/build-system/install-buildsystem) documentation.
+# 3. qBittorrent
+CONFIG_PACKAGE_qbittorrent=y
+CONFIG_PACKAGE_luci-app-qbittorrent=y
+二、 自动创建与挂载 2GB Swap（uci-defaults 自动脚本）
+为了实现“刷入固件开机后自动在 64GB eMMC 分区/挂载盘创建并启用 2GB Swap”，我们可以在编译源码的 files/etc/uci-defaults/ 目录下添加一个初始化脚本。
 
-  ### Quickstart
-  1. Run `git clone -b <branch> --single-branch --filter=blob:none https://github.com/immortalwrt/immortalwrt` to clone the source code.
-  2. Run `cd immortalwrt` to enter source directory.
-  3. Run `./scripts/feeds update -a` to obtain all the latest package definitions defined in feeds.conf / feeds.conf.default
-  4. Run `./scripts/feeds install -a` to install symlinks for all obtained packages into package/feeds/
-  5. Run `make menuconfig` to select your preferred configuration for the toolchain, target system & firmware packages.
-  6. Run `make` to build your firmware. This will download all sources, build the cross-compile toolchain and then cross-compile the GNU/Linux kernel & all chosen applications for your target system.
+在 GitHub Actions 仓库中创建路径：files/etc/uci-defaults/99-setup-swap，内容如下：
 
-  ### Related Repositories
-  The main repository uses multiple sub-repositories to manage packages of different categories. All packages are installed via the OpenWrt package manager called opkg. If you're looking to develop the web interface or port packages to ImmortalWrt, please find the fitting repository below.
-  - [LuCI Web Interface](https://github.com/immortalwrt/luci): Modern and modular interface to control the device via a web browser.
-  - [ImmortalWrt Packages](https://github.com/immortalwrt/packages): Community repository of ported packages.
-  - [OpenWrt Routing](https://github.com/openwrt/routing): Packages specifically focused on (mesh) routing.
-  - [OpenWrt Video](https://github.com/openwrt/video): Packages specifically focused on display servers and clients (Xorg and Wayland).
+Bash
+#!/bin/sh
 
-## Support Information
-For a list of supported devices see the [OpenWrt Hardware Database](https://openwrt.org/supported_devices)
-  ### Documentation
-  - [Quick Start Guide](https://openwrt.org/docs/guide-quick-start/start)
-  - [User Guide](https://openwrt.org/docs/guide-user/start)
-  - [Developer Documentation](https://openwrt.org/docs/guide-developer/start)
-  - [Technical Reference](https://openwrt.org/docs/techref/start)
+SWAP_PATH="/overlay/swapfile"
 
-  ### Support Community
-  - Support Chat: group [@ctcgfw_openwrt_discuss](https://t.me/ctcgfw_openwrt_discuss) on [Telegram](https://telegram.org/).
-  - Support Chat: group [#immortalwrt](https://matrix.to/#/#immortalwrt:matrix.org) on [Matrix](https://matrix.org/).
+# 检查是否已存在 swap 文件，若不存在则创建
+if [ ! -f "$SWAP_PATH" ]; then
+    # 在 /overlay 上创建 2048M (2GB) 空文件
+    dd if=/dev/zero of=$SWAP_PATH bs=1M count=2048
+    chmod 600 $SWAP_PATH
+    mkswap $SWAP_PATH
+fi
 
-## License
-ImmortalWrt is licensed under [GPL-2.0-only](https://spdx.org/licenses/GPL-2.0-only.html).
+# 配置 sysctl 降低 swappiness（适合 eMMC 延长寿命）
+if ! grep -q "vm.swappiness=20" /etc/sysctl.conf; then
+    echo "vm.swappiness=20" >> /etc/sysctl.conf
+    sysctl -p
+fi
 
-## Acknowledgements
-<table>
-  <tr>
-    <td><a href="https://dlercloud.com/"><img src="https://user-images.githubusercontent.com/22235437/111103249-f9ec6e00-8588-11eb-9bfc-67cc55574555.png" width="183" height="52" border="0" alt="Dler Cloud"></a></td>
-    <td><a href="https://www.jetbrains.com/"><img src="https://resources.jetbrains.com/storage/products/company/brand/logos/jb_square.png" width="120" height="120" border="0" alt="JetBrains Black Box Logo logo"></a></td>
-    <td><a href="https://sourceforge.net/"><img src="https://sourceforge.net/sflogo.php?type=17&group_id=3663829" alt="SourceForge" width=200></a></td>
-  </tr>
-</table>
+# 在 UCI 中注册 Swap 自动挂载
+uci add fstab swap
+uci set fstab.@swap[-1].device="$SWAP_PATH"
+uci set fstab.@swap[-1].enabled='1'
+uci commit fstab
+
+# 立即激活
+swapon $SWAP_PATH
+
+exit 0
+提示：GitHub 编译时，files/ 目录下的所有文件会被直接打进固件根目录，刷机后系统首次启动会执行 uci-defaults 里的脚本并自动删除它，实现全自动无感配置。
+
+三、 GitHub Actions Workflow 示例工作流
+这里提供一份极简的 .github/workflows/build-immortalwrt.yml 关键节点参考：
+
+YAML
+name: Build ImmortalWrt for RAX3000M
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gasm awk gettext ccache
+
+      - name: Clone source code
+        run: |
+          git clone -b master --single-branch https://github.com/immortalwrt/immortalwrt.git openwrt
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Load Custom Configuration & Files
+        run: |
+          # 复制自定义 .config 到源码目录
+          [ -e .config ] && cp .config openwrt/.config
+          # 复制包含 Swap 脚本的 files 目录
+          [ -d files ] && cp -r files openwrt/files
+
+      - name: Compile the firmware
+        run: |
+          cd openwrt
+          make defconfig
+          make download -j8
+          make -j$(nproc) V=s
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmortalWrt_RAX3000M
+          path: openwrt/bin/targets/mediatek/filogic/*rax3000m*
+四、 刷入固件后的部署步骤（Docker 部分）
+固件刷入并重启后，登录 OpenWrt 终端即可一键完成 1Panel 及其他 Docker 容器的部署：
+
+验证 Swap 是否正常启动：
+
+Bash
+free -m
+查看 Swap 行的总容量是否显示为 ~2048MB。
+
+部署 1Panel：
+
+Bash
+curl -sSL https://resource.fit2cloud.com/1panel/package/quick_start.sh -o quick_start.sh && sh quick_start.sh
+部署 Immich & Vaultwarden：
+登入 1Panel Web 管理界面，进入 应用商店：
+
+一键安装 Vaultwarden。
+
+一键安装 Immich（挂载路径选择你的外接 ext4 硬盘目录，如 /mnt/sda1/immich）。
